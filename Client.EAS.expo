@@ -1,0 +1,95 @@
+nome : Android Client - EAS Build
+
+SU :
+  flusso di lavoro_invio : {}
+  richiesta di pull :
+    percorsi :
+      - .github/workflows/client-android-eas.yml
+      - applicazioni/eas-expo-go/**
+      - applicazioni/expo-go/android/**
+  spingere :
+    rami : [principale, sdk-*]
+    percorsi :
+      - .github/workflows/client-android-eas.yml
+      - applicazioni/eas-expo-go/**
+      - applicazioni/expo-go/android/**
+  programma :
+    - cron : '20 5 * * *'  # 5:20 AM UTC ogni giorno
+
+concorrenza :
+  gruppo : ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  annulla-in-corso : vero
+
+lavori :
+  costruire :
+    eseguito su : ubuntu-22.04
+    se : ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
+    passi :
+      - nome : 👀 Checkout
+        usi : azioni/checkout@v4
+        con :
+          sottomoduli : vero
+      - nome : 🔓 Decifrare i segreti se possibile
+        usi : ./.github/actions/expo-git-decrypt
+        con :
+          chiave : ${{ segreti.GIT_CRYPT_KEY_BASE64 }}
+      - nome : ➕ Aggiungi `bin` a GITHUB_PATH
+        esegui : echo "$(pwd)/bin" >> $GITHUB_PATH
+      - nome : ♻️ Ripristina cache
+        usi : ./.github/actions/expo-caches
+        id : expo-cache
+        con :
+          yarn-workspace : 'vero'
+          strumenti-filato : 'vero'
+      - nome : 🧶 Installazione Yarn
+        se : steps.expo-caches.outputs.yarn-workspace-hit != 'true'
+        esegui : yarn install --frozen-lockfile
+      - nome : Installa eas-cli
+        eseguire : npm install -g eas-cli
+      - name : Genera credenziali locali.json
+        directory di lavoro : ./apps/eas-expo-go
+        correre : |
+          cat >credenziali.json <<EOL
+          {
+            "android": {
+              "keystore": {
+                "keystorePath": "release.keystore",
+                "keystorePassword": "$ANDROID_KEYSTORE_PASSWORD",
+                "keyAlias": "ExpoKey",
+                "keyPassword": "$ANDROID_KEY_PASSWORD"
+              }
+            }
+          }
+          EOL
+          echo $ANDROID_KEYSTORE_B64 | base64 -d > release.keystore
+        ambiente :
+          ANDROID_KEYSTORE_B64 : ${{ segreti.ANDROID_KEYSTORE_B64 }}
+          PASSWORD_ANDROID_KEYSTORE : ${{ segreti.PASSWORD_ANDROID_KEYSTORE}}
+          ANDROID_KEY_PASSWORD : ${{ segreti.ANDROID_KEY_PASSWORD }}
+      - nome : Costruisci
+        usi : ./.github/actions/eas-build
+        id : costruire
+        con :
+          piattaforma : 'android'
+          profilo : 'client'
+          projectRoot : './apps/eas-expo-go'
+          token dell'expo : ${{ secrets.EAS_BUILD_BOT_TOKEN }}
+          messaggio : ${{ github.event.pull_request.title }}
+      - nome : sul flusso di lavoro annullato
+        se : ${{ annullato() && steps.build.outputs.build_id }}
+        esegui : eas build:annulla ${{ steps.build.outputs.build_id }}
+        directory di lavoro : ./apps/eas-expo-go
+        ambiente :
+          EXPO_TOKEN : ${{ segreti.EAS_BUILD_BOT_TOKEN }}
+          EAS_BUILD_PROFILE : 'client'
+      - nome : 🔔 Notifica su Slack
+        usi : 8398a7/action-slack@v3
+        se : errore() && (github.event_name == 'programma' || github.event.ref == 'refs/heads/main' || startsWith(github.event.ref, 'refs/heads/sdk-'))
+        ambiente :
+          GITHUB_TOKEN : ${{ segreti.GITHUB_TOKEN }}
+          SLACK_WEBHOOK_GITHUB : ${{ segreti.SLACK_WEBHOOK_GITHUB }}
+        con :
+          canale : '#expo-android'
+          stato : ${{ stato.lavoro }}
+          campi : lavoro, messaggio, riferimento, nomeevento, autore, preso
+          author_name : Expo Go (Android)
